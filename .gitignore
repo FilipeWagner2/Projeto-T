@@ -1,0 +1,20 @@
+﻿# Build
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Secrets / local config
+.env
+.env.*
+appsettings.Development.json
+secrets.json
+*.pfx
+*.snk
+
+# OS
+Thumbs.db
+.DS_Store
