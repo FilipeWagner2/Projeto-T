@@ -14,5 +14,5 @@ internal static class AppConfig
     public const int OverlayHeight = 190;
 
     // Pequeno debounce para reduzir chamadas enquanto digita
-    public const int AutoTranslateDebounceMs = 180;
+    public AutoTranslateDebounceMs = 180;
 }
