@@ -20,11 +20,10 @@ Aplicativo desktop em WinForms focado em:
 4. Tradução automática (debounce curto) ou `ENTER` para traduzir na hora.
 5. `ESC` fecha o overlay instantaneamente.
 
-## Configuração rápida
+## Idiomas
 
-Arquivo: `AppConfig.cs`
-- `TargetLanguage = "pt"` para traduzir para português
-- troque para `"en"` para traduzir para inglês
+O overlay permite escolher o idioma de origem e o idioma de destino.
+`Detectar idioma` usa detecção automática para a origem. A lista inicial inclui português, inglês, espanhol, francês, alemão, italiano, japonês, chinês, coreano e russo.
 
 ## Arquitetura
 

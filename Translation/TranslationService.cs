@@ -5,6 +5,14 @@ namespace TranslatorTrayApp.Translation;
 
 internal sealed record TranslationResult(string TranslatedText, string? Context, string? Example);
 
+internal sealed class TranslationServiceException : Exception
+{
+    public TranslationServiceException(string message, Exception? innerException = null)
+        : base(message, innerException)
+    {
+    }
+}
+
 internal sealed class TranslationService
 {
     private static readonly HttpClient Http = new(new SocketsHttpHandler
@@ -22,29 +30,121 @@ internal sealed class TranslationService
     private readonly Queue<string> _cacheOrder = new();
     private const int MaxCacheItems = 100;
 
-    public async Task<TranslationResult> TranslateAsync(string text, string targetLanguage, CancellationToken cancellationToken)
+    public async Task<TranslationResult> TranslateAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        CancellationToken cancellationToken)
     {
         var cleanText = text.Trim();
         if (string.IsNullOrWhiteSpace(cleanText))
             return new TranslationResult(string.Empty, null, null);
 
-        var key = $"{targetLanguage}|{cleanText}";
+        var key = $"{sourceLanguage}|{targetLanguage}|{cleanText}";
         if (TryGetCached(key, out var cached))
             return cached;
 
         var encoded = Uri.EscapeDataString(cleanText);
-        var url = $"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={targetLanguage}&dt=t&q={encoded}";
+        var url = $"https://translate.googleapis.com/translate_a/single?client=gtx&sl={Uri.EscapeDataString(sourceLanguage)}&tl={Uri.EscapeDataString(targetLanguage)}&dt=t&q={encoded}";
 
         using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (response.StatusCode is HttpStatusCode.TooManyRequests
+            or HttpStatusCode.Forbidden
+            or HttpStatusCode.ServiceUnavailable)
+        {
+            return await TranslateWithMyMemoryAsync(cleanText, sourceLanguage, targetLanguage, key, cancellationToken);
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            var details = SummarizeErrorBody(responseBody);
+
+            throw new TranslationServiceException(
+                $"HTTP {(int)response.StatusCode} ({response.ReasonPhrase}); resposta: {details}");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        JsonDocument json;
+        try
+        {
+            json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        }
+        catch (JsonException ex)
+        {
+            throw new TranslationServiceException(
+                $"A resposta do serviço não é um JSON válido: {ex.Message}", ex);
+        }
+
+        using (json)
+        {
+            var translated = ExtractTranslation(json.RootElement);
+            if (string.IsNullOrWhiteSpace(translated))
+            {
+                throw new TranslationServiceException(
+                    "O serviço respondeu sem um texto traduzido. O formato da resposta pode ter mudado.");
+            }
+
+            var result = BuildResult(cleanText, translated);
+            Cache(key, result);
+            return result;
+        }
+    }
+
+    private async Task<TranslationResult> TranslateWithMyMemoryAsync(
+        string text,
+        string sourceLanguage,
+        string targetLanguage,
+        string cacheKey,
+        CancellationToken cancellationToken)
+    {
+        var encodedText = Uri.EscapeDataString(text);
+        var source = sourceLanguage == "auto" ? "autodetect" : sourceLanguage;
+        var encodedPair = Uri.EscapeDataString($"{source}|{targetLanguage}");
+        var url = $"https://api.mymemory.translated.net/get?q={encodedText}&langpair={encodedPair}";
+
+        using var response = await Http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new TranslationServiceException(
+                $"O serviço alternativo respondeu HTTP {(int)response.StatusCode}: {SummarizeErrorBody(responseBody)}");
+        }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
-        var translated = ExtractTranslation(json.RootElement);
-        var result = BuildResult(cleanText, translated);
-        Cache(key, result);
+        if (!json.RootElement.TryGetProperty("responseData", out var responseData)
+            || !responseData.TryGetProperty("translatedText", out var translatedElement))
+        {
+            throw new TranslationServiceException("O serviço alternativo respondeu sem um texto traduzido.");
+        }
+
+        var translated = WebUtility.HtmlDecode(translatedElement.GetString());
+        if (string.IsNullOrWhiteSpace(translated))
+            throw new TranslationServiceException("O serviço alternativo respondeu com uma tradução vazia.");
+
+        var result = BuildResult(text, translated);
+        Cache(cacheKey, result);
         return result;
+    }
+
+    private static string SummarizeErrorBody(string? responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+            return "sem corpo de resposta";
+
+        var details = responseBody.Trim();
+        if (details.Contains("automated queries", StringComparison.OrdinalIgnoreCase)
+            || details.Contains("We're sorry", StringComparison.OrdinalIgnoreCase))
+        {
+            return "o serviço bloqueou temporariamente as requisições automáticas";
+        }
+
+        if (details.Length > 240)
+            details = details[..240] + "...";
+
+        return details;
     }
 
     private static TranslationResult BuildResult(string originalText, string translatedText)

@@ -1,4 +1,3 @@
-using TranslatorTrayApp.History;
 using TranslatorTrayApp.Translation;
 using TranslatorTrayApp.UI;
 
@@ -13,8 +12,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext()
     {
         var translationService = new TranslationService();
-        var historyStore = new TranslationHistoryStore();
-        _overlayForm = new OverlayForm(translationService, historyStore);
+        _overlayForm = new OverlayForm(translationService);
 
         _hotkeyWindow = new HotkeyWindow(id: 1);
         _hotkeyWindow.HotkeyPressed += (_, _) => OnHotkeyPressed();
@@ -42,28 +40,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void OnHotkeyPressed()
     {
         _overlayForm.ShowOverlay();
-
-        var clipboardText = TryGetClipboardText();
-        if (!string.IsNullOrWhiteSpace(clipboardText))
-            _overlayForm.SetInputAndTranslate(clipboardText!);
-        else
-            _overlayForm.FocusInput(selectAll: true);
-    }
-
-    private static string? TryGetClipboardText()
-    {
-        try
-        {
-            if (!Clipboard.ContainsText())
-                return null;
-
-            var text = Clipboard.GetText();
-            return string.IsNullOrWhiteSpace(text) ? null : text;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     protected override void ExitThreadCore()
